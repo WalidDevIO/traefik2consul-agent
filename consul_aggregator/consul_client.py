@@ -2,7 +2,7 @@
 Consul HTTP client.
 
 Handles all communication with the Consul agent API:
-health checks, service registration, and connection state tracking.
+health checks, service registration, KV store, and connection state tracking.
 """
 
 import logging
@@ -58,10 +58,10 @@ class ConsulClient:
             self._set_alive(False)
             return False
 
-    # ── HTTP helpers ──────────────────────────────────────────
+    # ── Generic HTTP helpers ──────────────────────────────────
 
     def put(self, path: str, payload: Optional[dict] = None) -> bool:
-        """Generic PUT to Consul."""
+        """Generic PUT to Consul (JSON body)."""
         try:
             kwargs: dict = {"timeout": 10}
             if payload is not None:
@@ -85,6 +85,50 @@ class ConsulClient:
                 self._set_alive(False)
             return False
 
+    # ── Service registration ──────────────────────────────────
+
     def register_service(self, payload: dict) -> bool:
         """Register (or update) a service in the local Consul agent."""
         return self.put("/v1/agent/service/register", payload)
+
+    # ── KV store ──────────────────────────────────────────────
+
+    def kv_put(self, key: str, value: str) -> bool:
+        """Write a single key/value pair to the Consul KV store."""
+        try:
+            r = requests.put(
+                f"{self._addr}/v1/kv/{key}",
+                data=value.encode("utf-8"),
+                timeout=10,
+            )
+            if r.status_code == 200:
+                if not self.is_alive:
+                    self._set_alive(True)
+                return True
+            logger.warning(f"Consul KV PUT {key} returned {r.status_code}")
+            return False
+        except Exception as e:
+            if self.is_alive:
+                logger.warning(f"Consul KV unreachable: {e}")
+                self._set_alive(False)
+            return False
+
+    def kv_delete(self, key: str) -> bool:
+        """Delete a single key from the Consul KV store."""
+        try:
+            r = requests.delete(f"{self._addr}/v1/kv/{key}", timeout=10)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    def kv_delete_tree(self, prefix: str) -> bool:
+        """Delete all keys under a prefix (recurse)."""
+        try:
+            r = requests.delete(
+                f"{self._addr}/v1/kv/{prefix}",
+                params={"recurse": "true"},
+                timeout=10,
+            )
+            return r.status_code == 200
+        except Exception:
+            return False

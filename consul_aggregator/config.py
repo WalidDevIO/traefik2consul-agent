@@ -6,6 +6,7 @@ Loads all configuration from environment variables into a typed dataclass.
 
 import os
 import logging
+import urllib.parse
 from dataclasses import dataclass
 
 
@@ -21,7 +22,9 @@ class Config:
     hc_deregister_after: str
     traefik_url: str
     traefik_host: str
-    service: str
+    service_http: str
+    service_https: str
+    kv_prefix: str
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -44,6 +47,12 @@ class Config:
             logging.getLogger(__name__).warning("SERVICE is not set, using TRAEFIK_URL")
             service = "http:" + traefik_url.split(":")[1] + ":80"
 
+        # Derive HTTP (port 80) and HTTPS (port 443) endpoints from SERVICE host
+        parsed = urllib.parse.urlparse(service)
+        host = parsed.hostname or ""
+        service_http = f"http://{host}:80"
+        service_https = f"https://{host}:443"
+
         return cls(
             consul_addr=consul_addr,
             node_name=node_name,
@@ -53,7 +62,8 @@ class Config:
             hc_deregister_after=hc_deregister_after,
             traefik_url=traefik_url,
             traefik_host=traefik_host,
-            service=service,
+            service_http=service_http,
+            service_https=service_https,
         )
 
 

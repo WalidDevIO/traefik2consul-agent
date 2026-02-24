@@ -6,7 +6,6 @@ and normalizing routers/middlewares from Traefik rawdata.
 All functions are stateless — node_name is passed as parameter where needed.
 """
 
-import json
 import re
 import urllib.parse
 from typing import Any, Dict, Tuple
@@ -85,16 +84,17 @@ def extract_http_routers_middlewares(
     return routers, mws
 
 
-# ── Router / middleware normalization ─────────────────────────
+# ── Router normalization ─────────────────────────────────────
 
 
-def normalize_router(router: dict) -> Dict[str, str]:
+def normalize_router(router: dict) -> Dict[str, Any]:
     """
     Export minimal safe fields from a router config:
-    rule, entrypoints, middlewares, tls, priority.
+    rule, entryPoints, middlewares, tls, priority.
+    Values are returned in their native types (lists stay as lists).
     We intentionally do NOT export "service".
     """
-    out: Dict[str, str] = {}
+    out: Dict[str, Any] = {}
 
     rule = router.get("rule") or router.get("Rule")
     if rule:
@@ -107,23 +107,21 @@ def normalize_router(router: dict) -> Dict[str, str]:
     )
     if eps:
         if isinstance(eps, list):
-            out["entrypoints"] = ",".join([str(x) for x in eps])
+            out["entryPoints"] = eps
         else:
-            out["entrypoints"] = str(eps)
+            out["entryPoints"] = [str(eps)]
 
     mws = router.get("middlewares") or router.get("Middlewares")
     if mws:
         if isinstance(mws, list):
-            out["middlewares"] = ",".join([str(x) for x in mws if x])
+            out["middlewares"] = [str(x) for x in mws if x]
         else:
-            out["middlewares"] = str(mws)
+            out["middlewares"] = [str(mws)]
 
     tls = router.get("tls") or router.get("TLS")
     if tls is not None:
-        if isinstance(tls, dict):
-            out["tls"] = "true"
-        else:
-            out["tls"] = "true" if bool(tls) else "false"
+        if isinstance(tls, dict) or bool(tls):
+            out["tls"] = True
 
     prio = router.get("priority") or router.get("Priority")
     if prio is not None:
@@ -132,66 +130,29 @@ def normalize_router(router: dict) -> Dict[str, str]:
     return out
 
 
-def normalize_middlewares(raw_mws: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+# ── Recursive KV flattening ──────────────────────────────────
+
+
+def flatten_to_kv(data: Any, prefix: str, out: Dict[str, str]) -> None:
     """
-    Convert each middleware config into label-style flattened props:
-      mw_name -> { "forwardauth.address": "...", ... }
+    Recursively flatten a nested dict/list into Consul KV path→value pairs.
 
-    Strategy:
-      - ignore "status" and "usedBy" keys
-      - detect the type key (first remaining key)
-      - flatten <type>.<key>=value
-      - complex values (dict/list) => JSON compact
+    Examples:
+      {"forwardAuth": {"address": "http://..."}}
+      → {"prefix/forwardAuth/address": "http://..."}
+
+      ["web", "websecure"]
+      → {"prefix/0": "web", "prefix/1": "websecure"}
     """
-    out: Dict[str, Dict[str, str]] = {}
-
-    for mw_name, mw_conf in raw_mws.items():
-        if not isinstance(mw_conf, dict):
-            continue
-
-        # find middleware type key
-        mw_type = None
-        for k in mw_conf.keys():
-            if k in ("status", "usedBy"):
-                continue
-            mw_type = k
-            break
-
-        if mw_type is None:
-            continue
-
-        props: Dict[str, str] = {}
-        conf = mw_conf.get(mw_type, {})
-        if conf is None:
-            conf = {}
-
-        if isinstance(conf, dict):
-            if conf:
-                for ck, cv in conf.items():
-                    key = f"{mw_type}.{ck}".lower()
-                    if isinstance(cv, (dict, list)):
-                        props[key] = json.dumps(
-                            cv, separators=(",", ":"), ensure_ascii=False
-                        )
-                    else:
-                        props[key] = str(cv)
-            else:
-                # empty config means "enabled defaults"
-                props[mw_type.lower()] = "true"
-        else:
-            props[mw_type.lower()] = str(conf)
-
-        out[mw_name] = props
-
-    return out
-
-
-def rewrite_middlewares_list(mw_list_str: str, node_name: str) -> str:
-    """
-    Rewrite router.middlewares to namespaced, stripped form:
-      "redirect-to-https@file,OIDC MZ@http" ->
-      "<NODE>-redirect-to-https__file,<NODE>-OIDC_MZ__http"
-    """
-    items = [x.strip() for x in mw_list_str.split(",") if x.strip()]
-    rewritten = [ns_with_provider(x, node_name) for x in items]
-    return ",".join(rewritten)
+    if isinstance(data, dict):
+        for k, v in data.items():
+            flatten_to_kv(v, f"{prefix}/{k}", out)
+    elif isinstance(data, list):
+        for i, v in enumerate(data):
+            flatten_to_kv(v, f"{prefix}/{i}", out)
+    elif isinstance(data, bool):
+        out[prefix] = "true" if data else "false"
+    elif data is not None:
+        out[prefix] = str(data)
+    else:
+        out[prefix] = ""
