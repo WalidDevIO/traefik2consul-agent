@@ -82,7 +82,7 @@ if not TRAEFIK_URL:
 
 if not SERVICE:
     logger.warning("SERVICE is not set, using TRAEFIK_URL")
-    SERVICE = TRAEFIK_URL.split(":")[0] + ":80"
+    SERVICE = "http:" + TRAEFIK_URL.split(":")[1] + ":80"
 
 # ── Consul health state ───────────────────────────────────────
 _consul_alive = True
@@ -488,11 +488,12 @@ def periodic_resync():
 
 def main():
     logger.info("=" * 60)
-    logger.info("traefik-rawdata-consul-bridge (final)")
+    logger.info("traefik-rawdata-consul-bridge")
     logger.info(f"  node:            {NODE_NAME}")
     logger.info(f"  consul:          {CONSUL_ADDR}")
     logger.info(f"  traefik_url:     {TRAEFIK_URL}")
     logger.info(f"  traefik_host:    {TRAEFIK_HOST or '(none)'}")
+    logger.info(f"  service:         {SERVICE}")
     logger.info(f"  resync_interval: {RESYNC_SECONDS}s")
     logger.info(f"  healthcheck:     TCP {HC_INTERVAL}/{HC_TIMEOUT}")
     logger.info("=" * 60)
