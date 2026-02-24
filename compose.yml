@@ -1,0 +1,9 @@
+services:
+  consul-aggregator:
+    build: .
+    container_name: consul-aggregator
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: "1"
+    env_file:
+      - .env
