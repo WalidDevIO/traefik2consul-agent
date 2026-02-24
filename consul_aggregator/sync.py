@@ -1,86 +1,76 @@
 """
 Synchronization engine.
 
-Manages the KV sync, service registration, and background threads
-for Consul monitoring and periodic Traefik resync.
-
-Strategy:
-  - On each sync: compute new KV entries, diff with previous set,
-    DELETE stale keys, PUT new/changed keys.
-  - Also register lightweight services (no tags) for health checks.
+Manages the sync loop between Traefik and Consul.
+Supports two modes:
+  - "kv"   : writes config to Consul KV store (differential updates)
+  - "tags" : registers services with Traefik tags in Consul catalog
 """
 
 import logging
 import threading
 import time
-from typing import Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from .config import Config
 from .consul_client import ConsulClient
-from .kv_builder import KVBuilder
 from .traefik_client import TraefikClient
 
 logger = logging.getLogger("consul_aggregator")
 
 
 class SyncEngine:
-    """Orchestrates the sync loop between Traefik and Consul KV."""
+    """Orchestrates the sync loop between Traefik and Consul."""
 
     def __init__(
         self,
         config: Config,
         consul: ConsulClient,
         traefik: TraefikClient,
-        kv_builder: KVBuilder,
+        builder: Any,  # KVBuilder or TagBuilder
     ) -> None:
         self._config = config
         self._consul = consul
         self._traefik = traefik
-        self._kv_builder = kv_builder
+        self._builder = builder
+        self._mode = config.mode
 
-        # Track known KV keys for differential updates (thread-safe)
+        # KV mode: track known keys for differential updates
         self._known_keys: Set[str] = set()
         self._keys_lock = threading.Lock()
 
-        # Cache last KV entries for retry on Consul recovery
-        self._cached_entries: Optional[Dict[str, str]] = None
+        # Cache for retry on Consul recovery
+        self._cache: Optional[Any] = None
         self._cache_lock = threading.Lock()
 
     # ── Cache ─────────────────────────────────────────────────
 
-    def _cache_set(self, entries: Dict[str, str]) -> None:
+    def _cache_set(self, data: Any) -> None:
         with self._cache_lock:
-            self._cached_entries = entries
+            self._cache = data
 
-    def _cache_get(self) -> Optional[Dict[str, str]]:
+    def _cache_get(self) -> Optional[Any]:
         with self._cache_lock:
-            return self._cached_entries
+            return self._cache
 
-    # ── KV sync (differential) ────────────────────────────────
+    # ── KV mode sync ──────────────────────────────────────────
 
     def _sync_kv(self, entries: Dict[str, str]) -> bool:
-        """
-        Write KV entries to Consul, deleting stale keys from previous sync.
-        Returns True if all writes succeeded.
-        """
+        """Write KV entries, deleting stale keys from previous sync."""
         new_keys = set(entries.keys())
 
         with self._keys_lock:
             stale_keys = self._known_keys - new_keys
 
-        # Delete stale keys
         for key in stale_keys:
-            if not self._consul.kv_delete(key):
-                logger.warning(f"failed to delete stale KV key: {key}")
+            self._consul.kv_delete(key)
 
         if stale_keys:
             logger.info(f"🗑️  deleted {len(stale_keys)} stale KV keys")
 
-        # Put new/updated entries
         ok = True
         for key, value in entries.items():
             if not self._consul.kv_put(key, value):
-                logger.warning(f"failed to write KV key: {key}")
                 ok = False
 
         with self._keys_lock:
@@ -88,25 +78,22 @@ class SyncEngine:
 
         return ok
 
-    # ── Snapshot push ─────────────────────────────────────────
-
-    def _push_snapshot(self, entries: Dict[str, str]) -> None:
-        """Cache entries and attempt to sync KV + register services."""
+    def _push_kv(self, entries: Dict[str, str]) -> None:
+        """Cache KV entries and attempt sync."""
         self._cache_set(entries)
 
         if not self._consul.is_alive:
             logger.warning("📦 cached snapshot (Consul down)")
             return
 
-        # Sync KV entries
         ok = self._sync_kv(entries)
         if ok:
             logger.info(f"✅ synced {len(entries)} KV entries")
         else:
             logger.warning("⚠️ some KV writes failed (cached for retry)")
 
-        # Register lightweight services (health checks)
-        for payload in self._kv_builder.build_service_payloads():
+        # Register lightweight services (health checks only)
+        for payload in self._builder.build_service_payloads():
             svc_ok = self._consul.register_service(payload)
             if svc_ok:
                 logger.info(
@@ -116,23 +103,54 @@ class SyncEngine:
             else:
                 logger.warning(f"⚠️ service registration failed: {payload['Name']}")
 
+    # ── Tags mode sync ────────────────────────────────────────
+
+    def _push_tags(self, payloads: List[dict]) -> None:
+        """Cache payloads and attempt service registration."""
+        self._cache_set(payloads)
+
+        if not self._consul.is_alive:
+            logger.warning("📦 cached snapshot (Consul down)")
+            return
+
+        for payload in payloads:
+            ok = self._consul.register_service(payload)
+            if ok:
+                logger.info(
+                    f"✅ registered: {payload['Name']} "
+                    f"@ {payload['Address']}:{payload['Port']} "
+                    f"(tags={len(payload['Tags'])})"
+                )
+            else:
+                logger.warning(
+                    f"⚠️ register failed for {payload['Name']} (cached for retry)"
+                )
+
+    # ── Mode-agnostic push ────────────────────────────────────
+
+    def _push(self, data: Any) -> None:
+        if self._mode == "kv":
+            self._push_kv(data)
+        else:
+            self._push_tags(data)
+
+    def _build(self, rawdata: dict) -> Any:
+        if self._mode == "kv":
+            return self._builder.build_kv_entries(rawdata)
+        else:
+            tags_by_proto = self._builder.build_tags(rawdata)
+            return self._builder.build_consul_payloads(tags_by_proto)
+
     def _push_cached_if_any(self) -> None:
-        entries = self._cache_get()
-        if not entries:
+        data = self._cache_get()
+        if not data:
             return
         logger.info("🔄 Consul back — pushing cached snapshot")
-        self._push_snapshot(entries)
-
-    # ── Build pipeline ────────────────────────────────────────
-
-    def _build_entries(self, rawdata: dict) -> Dict[str, str]:
-        """Fetch rawdata → KV entries pipeline."""
-        return self._kv_builder.build_kv_entries(rawdata)
+        self._push(data)
 
     # ── Background threads ────────────────────────────────────
 
     def _consul_monitor(self) -> None:
-        """Periodically check Consul health; push cache when it comes back."""
         was_alive = True
         while True:
             time.sleep(10)
@@ -142,30 +160,27 @@ class SyncEngine:
             was_alive = alive
 
     def _periodic_resync(self) -> None:
-        """Periodically fetch rawdata and push a fresh snapshot."""
         while True:
             time.sleep(self._config.resync_seconds)
             try:
                 raw = self._traefik.fetch_rawdata()
-                entries = self._build_entries(raw)
-                self._push_snapshot(entries)
+                data = self._build(raw)
+                self._push(data)
             except Exception as e:
                 logger.warning(f"resync failed: {e}")
 
     # ── Public API ────────────────────────────────────────────
 
     def initial_sync(self) -> None:
-        """Perform one immediate fetch + push on startup."""
         try:
             logger.info("🔍 Initial rawdata snapshot...")
             raw = self._traefik.fetch_rawdata()
-            entries = self._build_entries(raw)
-            self._push_snapshot(entries)
+            data = self._build(raw)
+            self._push(data)
         except Exception as e:
             logger.warning(f"initial snapshot failed: {e}")
 
     def start(self) -> None:
-        """Run the initial sync and spin up background threads (blocking)."""
         self._consul.health_check()
         self.initial_sync()
 

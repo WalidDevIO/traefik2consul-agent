@@ -24,7 +24,7 @@ class Config:
     traefik_host: str
     service_http: str
     service_https: str
-    kv_prefix: str
+    mode: str  # "kv" or "tags"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -39,6 +39,9 @@ class Config:
         traefik_url = os.environ.get("TRAEFIK_URL", "").rstrip("/")
         traefik_host = os.environ.get("TRAEFIK_HOST", "").strip()
         service = os.environ.get("SERVICE", "").strip()
+        mode = os.environ.get("MODE", "kv").strip().lower()
+        if mode not in ("kv", "tags"):
+            raise SystemExit(f"MODE must be 'kv' or 'tags', got '{mode}'")
 
         if not traefik_url:
             raise SystemExit("TRAEFIK_URL is required (e.g. http://traefik:8080)")
@@ -64,6 +67,7 @@ class Config:
             traefik_host=traefik_host,
             service_http=service_http,
             service_https=service_https,
+            mode=mode,
         )
 
 

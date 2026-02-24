@@ -27,7 +27,7 @@ from .config import Config
 from .normalizer import (
     extract_http_routers_middlewares,
     flatten_to_kv,
-    normalize_router,
+    normalize_router_kv,
     ns_with_provider,
     parse_service_endpoint,
 )
@@ -51,7 +51,7 @@ class KVBuilder:
         self._hc_interval = config.hc_interval
         self._hc_timeout = config.hc_timeout
         self._hc_deregister_after = config.hc_deregister_after
-        self._prefix = config.kv_prefix
+        self._prefix = "traefik"
 
     # ── Helpers ───────────────────────────────────────────────
 
@@ -107,7 +107,7 @@ class KVBuilder:
             if not isinstance(r_conf, dict):
                 continue
 
-            props = normalize_router(r_conf)
+            props = normalize_router_kv(r_conf)
             if not props.get("rule"):
                 continue
 
