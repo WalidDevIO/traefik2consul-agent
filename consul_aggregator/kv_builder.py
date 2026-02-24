@@ -86,11 +86,24 @@ class KVBuilder:
             self._service_https
         )
 
-        # ── serversTransport: skip TLS verification for HTTPS backends ──
-        st_name = "insecure-skip-verify"
-        entries[f"{p}/http/serversTransports/{st_name}/insecureSkipVerify"] = "true"
+        # ── serversTransports ──────────────────────────────────
+        # HTTP: keep-alive only
+        st_http = "keep-alive"
+        stp = f"{p}/http/serversTransports/{st_http}"
+        entries[f"{stp}/maxIdleConnsPerHost"] = "32"
+        entries[f"{stp}/forwardingTimeouts/idleConnTimeout"] = "90s"
+        entries[f"{p}/http/services/{self.svc_name_http}/loadBalancer/serversTransport"] = (
+            st_http
+        )
+
+        # HTTPS: keep-alive + skip TLS verification
+        st_https = "insecure-skip-verify"
+        stp = f"{p}/http/serversTransports/{st_https}"
+        entries[f"{stp}/insecureSkipVerify"] = "true"
+        entries[f"{stp}/maxIdleConnsPerHost"] = "32"
+        entries[f"{stp}/forwardingTimeouts/idleConnTimeout"] = "90s"
         entries[f"{p}/http/services/{self.svc_name_https}/loadBalancer/serversTransport"] = (
-            st_name
+            st_https
         )
 
         routers_raw, mws_raw = extract_http_routers_middlewares(rawdata)

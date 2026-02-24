@@ -74,11 +74,19 @@ class TagBuilder:
         """
         routers_raw, mws_raw = extract_http_routers_middlewares(rawdata)
 
-        http_tags: List[str] = ["traefik.enable=true"]
+        http_tags: List[str] = [
+            "traefik.enable=true",
+            # serversTransport: keep-alive for HTTP backends
+            "traefik.http.serversTransports.keep-alive.maxIdleConnsPerHost=32",
+            "traefik.http.serversTransports.keep-alive.forwardingTimeouts.idleConnTimeout=90s",
+            f"traefik.http.services.{self._svc_name_http}.loadBalancer.serversTransport=keep-alive",
+        ]
         https_tags: List[str] = [
             "traefik.enable=true",
-            # serversTransport: skip TLS verification for HTTPS backends
+            # serversTransport: skip TLS verification + keep-alive for HTTPS backends
             "traefik.http.serversTransports.insecure-skip-verify.insecureSkipVerify=true",
+            "traefik.http.serversTransports.insecure-skip-verify.maxIdleConnsPerHost=32",
+            "traefik.http.serversTransports.insecure-skip-verify.forwardingTimeouts.idleConnTimeout=90s",
             f"traefik.http.services.{self._svc_name_https}.loadBalancer.serversTransport=insecure-skip-verify",
         ]
 
