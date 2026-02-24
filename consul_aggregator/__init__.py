@@ -1,0 +1,1 @@
+# consul_aggregator package
