@@ -86,6 +86,13 @@ class KVBuilder:
             self._service_https
         )
 
+        # ── serversTransport: skip TLS verification for HTTPS backends ──
+        st_name = "insecure-skip-verify"
+        entries[f"{p}/http/serversTransports/{st_name}/insecureSkipVerify"] = "true"
+        entries[f"{p}/http/services/{self.svc_name_https}/loadBalancer/serversTransport"] = (
+            st_name
+        )
+
         routers_raw, mws_raw = extract_http_routers_middlewares(rawdata)
 
         # ── Middlewares ───────────────────────────────────────

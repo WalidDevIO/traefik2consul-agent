@@ -75,7 +75,12 @@ class TagBuilder:
         routers_raw, mws_raw = extract_http_routers_middlewares(rawdata)
 
         http_tags: List[str] = ["traefik.enable=true"]
-        https_tags: List[str] = ["traefik.enable=true"]
+        https_tags: List[str] = [
+            "traefik.enable=true",
+            # serversTransport: skip TLS verification for HTTPS backends
+            "traefik.http.serversTransports.insecure-skip-verify.insecureSkipVerify=true",
+            f"traefik.http.services.{self._svc_name_https}.loadBalancer.serversTransport=insecure-skip-verify",
+        ]
 
         # ── Middlewares (shared on both services) ─────────────
         mws_norm = normalize_middlewares(mws_raw)
