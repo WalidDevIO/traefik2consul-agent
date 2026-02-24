@@ -3,11 +3,18 @@ Synchronization engine.
 
 Manages the sync loop between Traefik and Consul.
 Supports two modes:
-  - "kv"   : writes config to Consul KV store (differential updates)
+  - "kv"   : writes config to Consul KV store (session-bound, auto-cleanup)
   - "tags" : registers services with Traefik tags in Consul catalog
+
+KV mode uses Consul Sessions (Behavior=delete):
+  - Session TTL = HC_DEREGISTER_AFTER (same as service deregister timeout)
+  - Renew interval = HC_INTERVAL (same as health check interval)
+  - All KV keys are acquired with the session
+  - If the agent dies, the session expires and Consul deletes all keys
 """
 
 import logging
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Set
@@ -17,6 +24,20 @@ from .consul_client import ConsulClient
 from .traefik_client import TraefikClient
 
 logger = logging.getLogger("consul_aggregator")
+
+
+def _parse_duration(s: str) -> int:
+    """Parse a Go-style duration string (e.g. '30s', '5m') to seconds."""
+    m = re.match(r"^(\d+)(s|m|h)?$", s.strip())
+    if not m:
+        return 30  # fallback
+    val = int(m.group(1))
+    unit = m.group(2) or "s"
+    if unit == "m":
+        return val * 60
+    if unit == "h":
+        return val * 3600
+    return val
 
 
 class SyncEngine:
@@ -35,9 +56,17 @@ class SyncEngine:
         self._builder = builder
         self._mode = config.mode
 
+        # Session config — reuse HC values for consistency
+        self._session_ttl = config.hc_deregister_after   # e.g. "30s"
+        self._renew_interval = _parse_duration(config.hc_interval)  # e.g. 10
+
         # KV mode: track known keys for differential updates
         self._known_keys: Set[str] = set()
         self._keys_lock = threading.Lock()
+
+        # KV mode: session ID (thread-safe)
+        self._session_id: Optional[str] = None
+        self._session_lock = threading.Lock()
 
         # Cache for retry on Consul recovery
         self._cache: Optional[Any] = None
@@ -53,10 +82,47 @@ class SyncEngine:
         with self._cache_lock:
             return self._cache
 
+    # ── Session management (KV mode) ─────────────────────────
+
+    def _get_session(self) -> Optional[str]:
+        with self._session_lock:
+            return self._session_id
+
+    def _ensure_session(self) -> Optional[str]:
+        """Create a session if we don't have one."""
+        with self._session_lock:
+            if self._session_id:
+                return self._session_id
+
+            sid = self._consul.session_create(
+                name=f"consul-aggregator-{self._config.node_name}",
+                ttl=self._session_ttl,
+            )
+            self._session_id = sid
+            return sid
+
+    def _session_renew_loop(self) -> None:
+        """Background thread: renew the session at HC_INTERVAL."""
+        while True:
+            time.sleep(self._renew_interval)
+            sid = self._get_session()
+            if not sid:
+                continue
+            ok = self._consul.session_renew(sid)
+            if not ok:
+                logger.warning("🔑 session renew failed — will recreate")
+                with self._session_lock:
+                    self._session_id = None
+
     # ── KV mode sync ──────────────────────────────────────────
 
     def _sync_kv(self, entries: Dict[str, str]) -> bool:
-        """Write KV entries, deleting stale keys from previous sync."""
+        """Write KV entries with session acquire, delete stale keys."""
+        session = self._ensure_session()
+        if not session:
+            logger.warning("⚠️ no session — cannot write KV (cached for retry)")
+            return False
+
         new_keys = set(entries.keys())
 
         with self._keys_lock:
@@ -70,7 +136,7 @@ class SyncEngine:
 
         ok = True
         for key, value in entries.items():
-            if not self._consul.kv_put(key, value):
+            if not self._consul.kv_acquire(key, value, session):
                 ok = False
 
         with self._keys_lock:
@@ -88,7 +154,7 @@ class SyncEngine:
 
         ok = self._sync_kv(entries)
         if ok:
-            logger.info(f"✅ synced {len(entries)} KV entries")
+            logger.info(f"✅ synced {len(entries)} KV entries (session-bound)")
         else:
             logger.warning("⚠️ some KV writes failed (cached for retry)")
 
@@ -153,7 +219,7 @@ class SyncEngine:
     def _consul_monitor(self) -> None:
         was_alive = True
         while True:
-            time.sleep(10)
+            time.sleep(self._renew_interval)
             alive = self._consul.health_check()
             if alive and not was_alive:
                 self._push_cached_if_any()
@@ -186,6 +252,10 @@ class SyncEngine:
 
         threading.Thread(target=self._consul_monitor, daemon=True).start()
         threading.Thread(target=self._periodic_resync, daemon=True).start()
+
+        # KV mode: start session renew loop
+        if self._mode == "kv":
+            threading.Thread(target=self._session_renew_loop, daemon=True).start()
 
         logger.info("👂 Running (periodic snapshot mode)...")
         while True:

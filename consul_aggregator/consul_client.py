@@ -132,3 +132,75 @@ class ConsulClient:
             return r.status_code == 200
         except Exception:
             return False
+
+    def kv_acquire(self, key: str, value: str, session_id: str) -> bool:
+        """Write a KV pair bound to a session (auto-deleted on session expiry)."""
+        try:
+            r = requests.put(
+                f"{self._addr}/v1/kv/{key}",
+                params={"acquire": session_id},
+                data=value.encode("utf-8"),
+                timeout=10,
+            )
+            if r.status_code == 200:
+                # Consul returns "true" or "false" in body
+                return r.text.strip().lower() == "true"
+            logger.warning(f"Consul KV acquire {key} returned {r.status_code}")
+            return False
+        except Exception as e:
+            if self.is_alive:
+                logger.warning(f"Consul KV unreachable: {e}")
+                self._set_alive(False)
+            return False
+
+    # ── Sessions ──────────────────────────────────────────────
+
+    def session_create(self, name: str, ttl: str = "30s") -> Optional[str]:
+        """
+        Create a Consul session with Behavior=delete.
+        When the session expires (agent dies), all acquired KV keys are deleted.
+        Returns the session ID, or None on failure.
+        """
+        try:
+            r = requests.put(
+                f"{self._addr}/v1/session/create",
+                json={
+                    "Name": name,
+                    "TTL": ttl,
+                    "Behavior": "delete",
+                },
+                timeout=10,
+            )
+            if r.status_code == 200:
+                sid = r.json().get("ID")
+                logger.info(f"🔑 session created: {sid} (TTL={ttl})")
+                return sid
+            logger.warning(f"session create returned {r.status_code}: {r.text[:200]}")
+            return None
+        except Exception as e:
+            logger.warning(f"session create failed: {e}")
+            return None
+
+    def session_renew(self, session_id: str) -> bool:
+        """Renew a session to prevent it from expiring."""
+        try:
+            r = requests.put(
+                f"{self._addr}/v1/session/renew/{session_id}",
+                timeout=10,
+            )
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    def session_destroy(self, session_id: str) -> bool:
+        """Destroy a session (triggers Behavior=delete on all acquired keys)."""
+        try:
+            r = requests.put(
+                f"{self._addr}/v1/session/destroy/{session_id}",
+                timeout=10,
+            )
+            if r.status_code == 200:
+                logger.info(f"🔑 session destroyed: {session_id}")
+            return r.status_code == 200
+        except Exception:
+            return False
