@@ -17,6 +17,7 @@ from .traefik_client import TraefikClient
 def main() -> None:
     config = Config.from_env()
     logger = setup_logging()
+    logger.debug("main: application starting")
 
     logger.info("=" * 60)
     logger.info(f"traefik-rawdata-consul-bridge ({config.mode} mode)")
@@ -37,11 +38,14 @@ def main() -> None:
     if config.mode == "kv":
         from .kv_builder import KVBuilder
         builder = KVBuilder(config)
+        logger.debug("main: using KVBuilder")
     else:
         from .tag_builder import TagBuilder
         builder = TagBuilder(config)
+        logger.debug("main: using TagBuilder")
 
     engine = SyncEngine(config, consul, traefik, builder)
+    logger.debug("main: starting SyncEngine")
     engine.start()
 
 

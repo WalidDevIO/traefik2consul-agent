@@ -47,6 +47,10 @@ class TagBuilder:
         self._hc_interval = config.hc_interval
         self._hc_timeout = config.hc_timeout
         self._hc_deregister_after = config.hc_deregister_after
+        logger.debug(
+            f"TagBuilder initialized: node={self._node_name}, "
+            f"http={self._service_http}, https={self._service_https}"
+        )
 
     # ── Helpers ───────────────────────────────────────────────
 
@@ -73,6 +77,7 @@ class TagBuilder:
            "https": [...tags for gw-node-https...]}
         """
         routers_raw, mws_raw = extract_http_routers_middlewares(rawdata)
+        logger.debug(f"build_tags: found {len(routers_raw)} routers, {len(mws_raw)} middlewares")
 
         http_tags: List[str] = [
             "traefik.enable=true",
@@ -92,6 +97,7 @@ class TagBuilder:
 
         # ── Middlewares (shared on both services) ─────────────
         mws_norm = normalize_middlewares(mws_raw)
+        logger.debug(f"build_tags: normalized {len(mws_norm)} middlewares")
 
         for mw_name, props in mws_norm.items():
             mw_edge_name = ns_with_provider(mw_name, self._node_name)
@@ -103,10 +109,12 @@ class TagBuilder:
         # ── Routers ───────────────────────────────────────────
         for r_name, r_conf in routers_raw.items():
             if not isinstance(r_conf, dict):
+                logger.debug(f"build_tags: skipping router '{r_name}' (not a dict)")
                 continue
 
             props = normalize_router(r_conf)
             if not props.get("rule"):
+                logger.debug(f"build_tags: skipping router '{r_name}' (no rule)")
                 continue
 
             # Rewrite middleware refs
@@ -123,6 +131,10 @@ class TagBuilder:
 
             # Namespace the router name
             r_base_name = ns_with_provider(r_name, self._node_name)
+            logger.debug(
+                f"build_tags: router '{r_name}' -> '{r_base_name}' "
+                f"(has_web={has_web}, has_websecure={has_websecure})"
+            )
 
             if has_web and has_websecure:
                 # Split into two routers with unique suffixes
@@ -154,6 +166,7 @@ class TagBuilder:
                     tls=False,
                 )
 
+        logger.debug(f"build_tags: total http_tags={len(http_tags)}, https_tags={len(https_tags)}")
         return {"http": http_tags, "https": https_tags}
 
     @staticmethod
@@ -167,6 +180,7 @@ class TagBuilder:
         tls: bool,
     ) -> None:
         """Append all tags for a single edge router."""
+        logger.debug(f"_emit_router: edge_name={edge_name}, service={service}, tls={tls}")
         prefix = f"traefik.http.routers.{edge_name}"
         tags.append(f"{prefix}.entrypoints={entrypoints}")
         tags.append(f"{prefix}.service={service}")
@@ -187,8 +201,12 @@ class TagBuilder:
           - gw-<NODE>-http   (port 80)
           - gw-<NODE>-https  (port 443)
         """
+        logger.debug("build_consul_payloads: building 2 service payloads")
         http_addr, http_port = parse_service_endpoint(self._service_http)
         https_addr, https_port = parse_service_endpoint(self._service_https)
+        logger.debug(
+            f"build_consul_payloads: http={http_addr}:{http_port}, https={https_addr}:{https_port}"
+        )
 
         return [
             self._make_payload(
@@ -210,6 +228,7 @@ class TagBuilder:
     def _make_payload(
         self, *, sid: str, name: str, addr: str, port: int, tags: List[str]
     ) -> dict:
+        logger.debug(f"_make_payload: sid={sid}, name={name}, addr={addr}:{port}, tags_count={len(tags)}")
         return {
             "ID": sid,
             "Name": name,

@@ -56,7 +56,7 @@ class Config:
         service_http = f"http://{host}:80"
         service_https = f"https://{host}:443"
 
-        return cls(
+        cfg = cls(
             consul_addr=consul_addr,
             node_name=node_name,
             resync_seconds=resync_seconds,
@@ -69,6 +69,12 @@ class Config:
             service_https=service_https,
             mode=mode,
         )
+        logger = logging.getLogger("consul_aggregator")
+        logger.debug(
+            f"Config loaded: consul_addr={consul_addr}, node={node_name}, "
+            f"mode={mode}, resync={resync_seconds}s"
+        )
+        return cfg
 
 
 def setup_logging() -> logging.Logger:
@@ -90,5 +96,8 @@ def setup_logging() -> logging.Logger:
         debug_file.addFilter(lambda record: record.levelno == logging.DEBUG)
         debug_file.setFormatter(fmt)
         logger.addHandler(debug_file)
+        logger.debug("setup_logging: DEBUG file handler enabled (debug.log)")
+
+    logger.debug("setup_logging: logging configured")
 
     return logger

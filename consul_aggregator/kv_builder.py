@@ -52,6 +52,10 @@ class KVBuilder:
         self._hc_timeout = config.hc_timeout
         self._hc_deregister_after = config.hc_deregister_after
         self._prefix = "traefik"
+        logger.debug(
+            f"KVBuilder initialized: node={self._node_name}, "
+            f"http={self._service_http}, https={self._service_https}"
+        )
 
     # ── Helpers ───────────────────────────────────────────────
 
@@ -75,6 +79,7 @@ class KVBuilder:
         Build a flat dict of {consul_kv_key: value} pairs from rawdata.
         Includes services, middlewares, and routers.
         """
+        logger.debug(f"build_kv_entries: starting, rawdata keys={list(rawdata.keys())}")
         entries: Dict[str, str] = {}
         p = self._prefix
 
@@ -107,14 +112,17 @@ class KVBuilder:
         )
 
         routers_raw, mws_raw = extract_http_routers_middlewares(rawdata)
+        logger.debug(f"build_kv_entries: found {len(routers_raw)} routers, {len(mws_raw)} middlewares")
 
         # ── Middlewares ───────────────────────────────────────
         for mw_name, mw_conf in mws_raw.items():
             if not isinstance(mw_conf, dict):
+                logger.debug(f"build_kv_entries: skipping middleware '{mw_name}' (not a dict)")
                 continue
 
             mw_edge_name = ns_with_provider(mw_name, self._node_name)
             mw_prefix = f"{p}/http/middlewares/{mw_edge_name}"
+            logger.debug(f"build_kv_entries: processing middleware '{mw_name}' -> '{mw_edge_name}'")
 
             # Flatten the middleware config, skipping status/usedBy
             cleaned = {
@@ -125,10 +133,12 @@ class KVBuilder:
         # ── Routers ───────────────────────────────────────────
         for r_name, r_conf in routers_raw.items():
             if not isinstance(r_conf, dict):
+                logger.debug(f"build_kv_entries: skipping router '{r_name}' (not a dict)")
                 continue
 
             props = normalize_router_kv(r_conf)
             if not props.get("rule"):
+                logger.debug(f"build_kv_entries: skipping router '{r_name}' (no rule)")
                 continue
 
             # Rewrite middleware refs to namespaced names
@@ -145,6 +155,10 @@ class KVBuilder:
             props.pop("tls", None)
 
             r_base_name = ns_with_provider(r_name, self._node_name)
+            logger.debug(
+                f"build_kv_entries: router '{r_name}' -> '{r_base_name}' "
+                f"(has_web={has_web}, has_websecure={has_websecure})"
+            )
 
             if has_web and has_websecure:
                 self._emit_router_kv(
@@ -174,6 +188,7 @@ class KVBuilder:
                     tls=False,
                 )
 
+        logger.debug(f"build_kv_entries: total {len(entries)} KV entries built")
         return entries
 
     def _emit_router_kv(
@@ -187,6 +202,7 @@ class KVBuilder:
         tls: bool,
     ) -> None:
         """Write all KV entries for a single edge router."""
+        logger.debug(f"_emit_router_kv: edge_name={edge_name}, service={service}, tls={tls}")
         rp = f"{self._prefix}/http/routers/{edge_name}"
 
         entries[f"{rp}/service"] = service
@@ -210,8 +226,12 @@ class KVBuilder:
         These carry NO traefik tags — config is in KV.
         They exist for health checking only.
         """
+        logger.debug("build_service_payloads: building lightweight payloads")
         http_addr, http_port = parse_service_endpoint(self._service_http)
         https_addr, https_port = parse_service_endpoint(self._service_https)
+        logger.debug(
+            f"build_service_payloads: http={http_addr}:{http_port}, https={https_addr}:{https_port}"
+        )
 
         return [
             self._make_service_payload(
@@ -231,6 +251,7 @@ class KVBuilder:
     def _make_service_payload(
         self, *, sid: str, name: str, addr: str, port: int
     ) -> dict:
+        logger.debug(f"_make_service_payload: sid={sid}, name={name}, addr={addr}:{port}")
         return {
             "ID": sid,
             "Name": name,

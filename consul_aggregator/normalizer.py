@@ -7,9 +7,12 @@ All functions are stateless — node_name is passed as parameter where needed.
 """
 
 import json
+import logging
 import re
 import urllib.parse
 from typing import Any, Dict, Tuple
+
+logger = logging.getLogger("consul_aggregator")
 
 
 # ── Name helpers ──────────────────────────────────────────────
@@ -18,7 +21,9 @@ from typing import Any, Dict, Tuple
 def sanitize_name(name: str) -> str:
     """Replace spaces and unsafe characters for Traefik-compatible tag names."""
     name = name.replace(" ", "_")
-    return re.sub(r"[^a-zA-Z0-9_.-]", "_", name)
+    result = re.sub(r"[^a-zA-Z0-9_.-]", "_", name)
+    logger.debug(f"sanitize_name: '{name}' -> '{result}'")
+    return result
 
 
 def split_provider(name: str) -> Tuple[str, str]:
@@ -44,11 +49,14 @@ def ns_with_provider(original_name: str, node_name: str) -> str:
     base, prov = split_provider(original_name)
     base = sanitize_name(base)
     prov = sanitize_name(prov)
-    return sanitize_name(f"{node_name}-{base}__{prov}")
+    result = sanitize_name(f"{node_name}-{base}__{prov}")
+    logger.debug(f"ns_with_provider: '{original_name}' -> '{result}'")
+    return result
 
 
 def parse_service_endpoint(url: str) -> Tuple[str, int]:
     """Extract (host, port) from a service URL."""
+    logger.debug(f"parse_service_endpoint: url={url}")
     u = urllib.parse.urlparse(url)
     host = u.hostname or ""
     if not host:
@@ -57,6 +65,7 @@ def parse_service_endpoint(url: str) -> Tuple[str, int]:
         port = int(u.port)
     else:
         port = 443 if u.scheme == "https" else 80
+    logger.debug(f"parse_service_endpoint: -> host={host}, port={port}")
     return host, port
 
 
@@ -93,6 +102,9 @@ def extract_http_routers_middlewares(
     if not isinstance(mws, dict):
         mws = {}
 
+    logger.debug(
+        f"extract_http_routers_middlewares: {len(routers)} routers, {len(mws)} middlewares (after filtering @internal)"
+    )
     return routers, mws
 
 
@@ -104,6 +116,7 @@ def normalize_router(router: dict) -> Dict[str, str]:
     Export minimal safe fields from a router config as strings
     (used by TagBuilder — comma-joined lists).
     """
+    logger.debug(f"normalize_router: keys={list(router.keys())}")
     out: Dict[str, str] = {}
 
     rule = router.get("rule") or router.get("Rule")
@@ -150,6 +163,7 @@ def normalize_router_kv(router: dict) -> Dict[str, Any]:
     Export minimal safe fields from a router config as native types
     (used by KVBuilder — lists stay as lists, bools stay as bools).
     """
+    logger.debug(f"normalize_router_kv: keys={list(router.keys())}")
     out: Dict[str, Any] = {}
 
     rule = router.get("rule") or router.get("Rule")
@@ -200,6 +214,7 @@ def normalize_middlewares(raw_mws: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
       - flatten <type>.<key>=value
       - complex values (dict/list) => JSON compact
     """
+    logger.debug(f"normalize_middlewares: processing {len(raw_mws)} middlewares")
     out: Dict[str, Dict[str, str]] = {}
 
     for mw_name, mw_conf in raw_mws.items():
