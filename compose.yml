@@ -5,5 +5,20 @@ services:
     restart: unless-stopped
     environment:
       PYTHONUNBUFFERED: "1"
+    ports:
+      - "${API_PORT:-8099}:${API_PORT:-8099}"
     env_file:
       - .env
+    depends_on:
+      consul:
+        condition: service_started
+
+  consul:
+    image: hashicorp/consul:1.18
+    container_name: consul
+    restart: unless-stopped
+    ports:
+      - "8500:8500"
+    command: agent -server -bootstrap -ui -client=0.0.0.0 -data-dir=/consul/data
+    environment:
+      - CONSUL_BIND_INTERFACE=eth0

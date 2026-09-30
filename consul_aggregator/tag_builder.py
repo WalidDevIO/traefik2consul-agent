@@ -20,7 +20,7 @@ Architecture:
 import logging
 from typing import Dict, List, Tuple
 
-from .config import Config
+from .config import Config, InstanceConfig
 from .normalizer import (
     extract_http_routers_middlewares,
     normalize_middlewares,
@@ -40,10 +40,10 @@ EP_WEBSECURE = "websecure"
 class TagBuilder:
     """Transforms Traefik rawdata into Consul-ready tags and payloads."""
 
-    def __init__(self, config: Config) -> None:
-        self._node_name = config.node_name
-        self._service_http = config.service_http
-        self._service_https = config.service_https
+    def __init__(self, config: Config, instance: InstanceConfig) -> None:
+        self._node_name = f"{config.cluster_name}-{instance.name}" if instance.name != "default" else config.cluster_name
+        self._service_http = instance.service_http
+        self._service_https = instance.service_https
         self._hc_interval = config.hc_interval
         self._hc_timeout = config.hc_timeout
         self._hc_deregister_after = config.hc_deregister_after

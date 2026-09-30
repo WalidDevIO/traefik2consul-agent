@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Consul Aggregator — Traefik multi-instance management dashboard">
+    <title>Consul Aggregator - Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <style>
+        /* ── Reset & Base ─────────────────────────────────────── */
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg-primary: #f8fafc;
+            --bg-secondary: #f1f5f9;
+            --bg-card: #ffffff;
+            --bg-card-hover: #f8fafc;
+            --bg-input: #ffffff;
+            --border: #e2e8f0;
+            --border-focus: #3b82f6;
+            --text-primary: #0f172a;
+            --text-secondary: #334155;
+            --text-muted: #64748b;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #059669;
+            --success-bg: #d1fae5;
+            --danger: #dc2626;
+            --danger-bg: #fee2e2;
+            --warning: #d97706;
+            --warning-bg: #fef3c7;
+            --cyan: #0891b2;
+            --cyan-bg: #cffafe;
+            --radius: 6px;
+            --radius-sm: 4px;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+            font-size: 14px;
+        }
+
+        /* ── Layout ───────────────────────────────────────────── */
+        .app {
+            position: relative;
+        }
+
+        .header {
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-card);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .logo {
+            width: 32px;
+            height: 32px;
+            border-radius: var(--radius-sm);
+            background: var(--accent);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            font-weight: bold;
+            color: white;
+        }
+
+        .header-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .header-subtitle {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+            border: 1px solid var(--border);
+        }
+
+        .status-pill.online {
+            background: var(--success-bg);
+            color: var(--success);
+            border-color: #a7f3d0;
+        }
+
+        .status-pill.offline {
+            background: var(--danger-bg);
+            color: var(--danger);
+            border-color: #fca5a5;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .main {
+            padding: 32px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* ── Stats Grid ───────────────────────────────────────── */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .stat-sub {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* ── Section ──────────────────────────────────────────── */
+        .section {
+            margin-bottom: 32px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 8px;
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* ── Buttons ──────────────────────────────────────────── */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .btn:hover {
+            background: var(--bg-secondary);
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+            color: white;
+        }
+
+        .btn-danger {
+            color: var(--danger);
+            border-color: var(--danger);
+        }
+
+        .btn-danger:hover {
+            background: var(--danger-bg);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: white;
+            border-color: var(--success);
+        }
+
+        .btn-success:hover {
+            background: #047857;
+            color: white;
+        }
+
+        .btn-sm {
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ── Instance Cards ───────────────────────────────────── */
+        .instances-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px;
+        }
+
+        .instance-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+        }
+
+        .instance-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .instance-name {
+            font-weight: 600;
+        }
+
+        .instance-detail {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            font-size: 13px;
+        }
+
+        .instance-detail-label {
+            color: var(--text-muted);
+        }
+
+        .instance-detail-value {
+            color: var(--text-primary);
+            font-family: monospace;
+        }
+
+        /* ── Add Instance Form ────────────────────────────────── */
+        .add-form {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            display: none;
+            margin-bottom: 16px;
+        }
+
+        .add-form.open {
+            display: block;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .form-label {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+
+        .form-input {
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 8px;
+            font-family: inherit;
+            font-size: 13px;
+        }
+
+        .form-input:focus {
+            border-color: var(--border-focus);
+            outline: none;
+        }
+
+        .form-hint {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+
+        /* ── Config Panel ─────────────────────────────────────── */
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 1px;
+            background: var(--border);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .config-item {
+            background: var(--bg-card);
+            padding: 12px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .config-key {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .config-val {
+            font-weight: 500;
+            font-family: monospace;
+        }
+
+        /* ── Toast ─────────────────────────────────────────────── */
+        .toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .toast {
+            padding: 12px 16px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .toast.success { border-left: 4px solid var(--success); }
+        .toast.error { border-left: 4px solid var(--danger); }
+        .toast.info { border-left: 4px solid var(--accent); }
+
+        /* ── Empty State ──────────────────────────────────────── */
+        .empty-state {
+            text-align: center;
+            padding: 48px 24px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+
+        .empty-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .empty-desc {
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+
+        /* ── Responsive ───────────────────────────────────────── */
+        @media (max-width: 768px) {
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* ── Animations ───────────────────────────────────────── */
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateX(40px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        @keyframes toastOut {
+            from { opacity: 1; }
+            to { opacity: 0; transform: translateY(10px); }
+        }
+
+        .toast {
+            animation: toastIn 0.3s ease, toastOut 0.3s ease 2.6s forwards;
+        }
+
+        .spinning {
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <div class="logo">C</div>
+                <div>
+                    <div class="header-title">Consul Aggregator</div>
+                    <div class="header-subtitle">Traefik Multi-Instance Bridge</div>
+                </div>
+            </div>
+            <div class="header-right">
+                <div id="consul-status" class="status-pill offline">
+                    <span class="status-dot"></span>
+                    <span id="consul-status-text">Checking...</span>
+                </div>
+                <button class="btn btn-ghost btn-sm" onclick="triggerResync()" id="resync-btn">
+                    <span id="resync-icon">🔄</span> Resync
+                </button>
+            </div>
+        </header>
+
+        <main class="main">
+            <!-- Stats -->
+            <div class="stats-grid" id="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Instances</div>
+                    <div class="stat-value accent" id="stat-instances">—</div>
+                    <div class="stat-sub">Traefik sources</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Sync Mode</div>
+                    <div class="stat-value cyan" id="stat-mode">—</div>
+                    <div class="stat-sub" id="stat-node">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Sync Count</div>
+                    <div class="stat-value success" id="stat-syncs">—</div>
+                    <div class="stat-sub" id="stat-last-sync">Never</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Resync Interval</div>
+                    <div class="stat-value warning" id="stat-interval">—</div>
+                    <div class="stat-sub">seconds</div>
+                </div>
+            </div>
+
+            <!-- Instances -->
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-title"><span class="section-icon">🌐</span> Traefik Instances</div>
+                    <button class="btn btn-primary btn-sm" onclick="toggleAddForm()" id="add-btn">
+                        <span>+</span> Add Instance
+                    </button>
+                </div>
+
+                <!-- Add Form -->
+                <div class="add-form" id="add-form">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="inst-name">Name</label>
+                            <input class="form-input" id="inst-name" type="text" placeholder="e.g. traefik-prod">
+                            <div class="form-hint">Unique identifier for this instance</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="inst-url">Traefik API URL</label>
+                            <input class="form-input" id="inst-url" type="text" placeholder="http://traefik:8080">
+                            <div class="form-hint">URL to the Traefik API endpoint</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="inst-host">Host Header</label>
+                            <input class="form-input" id="inst-host" type="text" placeholder="(optional)">
+                            <div class="form-hint">Custom Host header for the API request</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="inst-service">Service URL</label>
+                            <input class="form-input" id="inst-service" type="text" placeholder="http://192.168.1.1:80">
+                            <div class="form-hint">L2 Traefik address (auto-derived if empty)</div>
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button class="btn btn-ghost btn-sm" onclick="toggleAddForm()">Cancel</button>
+                        <button class="btn btn-success btn-sm" onclick="submitInstance()">✓ Add Instance</button>
+                    </div>
+                </div>
+
+                <div id="instances-container"></div>
+            </div>
+
+            <!-- Config -->
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-title"><span class="section-icon">⚙️</span> Configuration</div>
+                </div>
+                <div class="config-grid" id="config-grid">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <script>
+        // ── State ────────────────────────────────────────────────
+        let refreshTimer = null;
+        const API = '';
+
+        // ── API Calls ────────────────────────────────────────────
+        async function fetchJSON(path, opts = {}) {
+            try {
+                const res = await fetch(API + path, {
+                    headers: { 'Content-Type': 'application/json' },
+                    ...opts,
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+                return data;
+            } catch (e) {
+                throw e;
+            }
+        }
+
+        // ── Toast ────────────────────────────────────────────────
+        function toast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const el = document.createElement('div');
+            el.className = `toast ${type}`;
+            el.textContent = message;
+            container.appendChild(el);
+            setTimeout(() => el.remove(), 3200);
+        }
+
+        // ── Status ───────────────────────────────────────────────
+        async function refreshStatus() {
+            try {
+                const status = await fetchJSON('/api/status');
+                const pill = document.getElementById('consul-status');
+                const pillText = document.getElementById('consul-status-text');
+
+                if (status.consul_alive) {
+                    pill.className = 'status-pill online';
+                    pillText.textContent = 'Consul Online';
+                } else {
+                    pill.className = 'status-pill offline';
+                    pillText.textContent = 'Consul Offline';
+                }
+
+                document.getElementById('stat-instances').textContent = status.instance_count;
+                document.getElementById('stat-mode').textContent = status.mode.toUpperCase();
+                document.getElementById('stat-node').textContent = `Cluster: ${status.cluster_name}`;
+                document.getElementById('stat-syncs').textContent = status.sync_count;
+                document.getElementById('stat-interval').textContent = status.resync_seconds;
+
+                if (status.last_sync_time) {
+                    const ago = Math.round(Date.now() / 1000 - status.last_sync_time);
+                    const label = ago < 60 ? `${ago}s ago` : `${Math.round(ago / 60)}m ago`;
+                    const icon = status.last_sync_ok ? '✅' : '⚠️';
+                    document.getElementById('stat-last-sync').textContent = `${icon} Last: ${label}`;
+                }
+            } catch {
+                document.getElementById('consul-status').className = 'status-pill offline';
+                document.getElementById('consul-status-text').textContent = 'API Unreachable';
+            }
+        }
+
+        // ── Instances ────────────────────────────────────────────
+        async function refreshInstances() {
+            try {
+                const instances = await fetchJSON('/api/instances');
+                const container = document.getElementById('instances-container');
+
+                if (instances.length === 0) {
+                    container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">🌐</div>
+                    <div class="empty-title">No instances configured</div>
+                    <div class="empty-desc">Add a Traefik instance to start aggregating routes into Consul.</div>
+                    <button class="btn btn-primary" onclick="toggleAddForm()">+ Add your first instance</button>
+                </div>`;
+                    return;
+                }
+
+                container.innerHTML = '<div class="instances-grid">' + instances.map(inst => `
+            <div class="instance-card">
+                <div class="instance-card-header">
+                    <div class="instance-name">
+                        <span>🟢</span>
+                        ${escapeHtml(inst.name)}
+                    </div>
+                    <div>
+                        <span class="instance-badge">traefik</span>
+                        <button class="btn btn-danger btn-sm" style="margin-left: 8px;" onclick="removeInstance('${escapeHtml(inst.name)}')">✕</button>
+                    </div>
+                </div>
+                <div class="instance-detail">
+                    <span class="instance-detail-label">API URL</span>
+                    <span class="instance-detail-value">${escapeHtml(inst.url)}</span>
+                </div>
+                <div class="instance-detail">
+                    <span class="instance-detail-label">Host</span>
+                    <span class="instance-detail-value">${inst.host || '—'}</span>
+                </div>
+                <div class="instance-detail">
+                    <span class="instance-detail-label">HTTP</span>
+                    <span class="instance-detail-value">${escapeHtml(inst.service_http)}</span>
+                </div>
+                <div class="instance-detail">
+                    <span class="instance-detail-label">HTTPS</span>
+                    <span class="instance-detail-value">${escapeHtml(inst.service_https)}</span>
+                </div>
+            </div>
+        `).join('') + '</div>';
+            } catch (e) {
+                toast('Failed to load instances', 'error');
+            }
+        }
+
+        // ── Config ───────────────────────────────────────────────
+        async function refreshConfig() {
+            try {
+                const cfg = await fetchJSON('/api/config');
+                const grid = document.getElementById('config-grid');
+                const items = [
+                    ['Consul Address', cfg.consul_addr],
+                    ['Cluster Name', cfg.cluster_name],
+                    ['Mode', cfg.mode],
+                    ['Resync Seconds', cfg.resync_seconds],
+                    ['HC Interval', cfg.hc_interval],
+                    ['HC Timeout', cfg.hc_timeout],
+                    ['HC Deregister After', cfg.hc_deregister_after],
+                    ['API Port', cfg.api_port],
+                ];
+                grid.innerHTML = items.map(([k, v]) => `
+            <div class="config-item">
+                <span class="config-key">${k}</span>
+                <span class="config-val">${escapeHtml(String(v))}</span>
+            </div>
+        `).join('');
+            } catch {
+                // silent
+            }
+        }
+
+        // ── Actions ──────────────────────────────────────────────
+        function toggleAddForm() {
+            const form = document.getElementById('add-form');
+            form.classList.toggle('open');
+            if (form.classList.contains('open')) {
+                document.getElementById('inst-name').focus();
+            }
+        }
+
+        async function submitInstance() {
+            const name = document.getElementById('inst-name').value.trim();
+            const url = document.getElementById('inst-url').value.trim();
+            const host = document.getElementById('inst-host').value.trim();
+            const service = document.getElementById('inst-service').value.trim();
+
+            if (!name || !url) {
+                toast('Name and URL are required', 'error');
+                return;
+            }
+
+            try {
+                await fetchJSON('/api/instances', {
+                    method: 'POST',
+                    body: JSON.stringify({ name, url, host, service }),
+                });
+                toast(`Instance "${name}" added successfully`, 'success');
+                document.getElementById('add-form').classList.remove('open');
+                document.getElementById('inst-name').value = '';
+                document.getElementById('inst-url').value = '';
+                document.getElementById('inst-host').value = '';
+                document.getElementById('inst-service').value = '';
+                refreshAll();
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        async function removeInstance(name) {
+            if (!confirm(`Remove instance "${name}"?`)) return;
+            try {
+                await fetchJSON(`/api/instances/${encodeURIComponent(name)}`, { method: 'DELETE' });
+                toast(`Instance "${name}" removed`, 'success');
+                refreshAll();
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        async function triggerResync() {
+            const icon = document.getElementById('resync-icon');
+            const btn = document.getElementById('resync-btn');
+            icon.classList.add('spinning');
+            btn.disabled = true;
+            try {
+                const res = await fetchJSON('/api/resync', { method: 'POST' });
+                toast(res.ok ? 'Resync completed' : 'Resync had errors', res.ok ? 'success' : 'error');
+                refreshAll();
+            } catch (e) {
+                toast('Resync failed', 'error');
+            } finally {
+                icon.classList.remove('spinning');
+                btn.disabled = false;
+            }
+        }
+
+        // ── Helpers ──────────────────────────────────────────────
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function refreshAll() {
+            refreshStatus();
+            refreshInstances();
+            refreshConfig();
+        }
+
+        // ── Init ─────────────────────────────────────────────────
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshAll();
+            refreshTimer = setInterval(refreshAll, 5000);
+        });
+    </script>
+</body>
+
+</html>

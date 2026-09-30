@@ -4,49 +4,57 @@ Bridge between **Traefik** Layer 2 reverse proxies and a **Consul**-backed **Tra
 
 The agent watches one or more internal Traefik instances via their `/api/rawdata` endpoint, extracts the live routing configuration (routers, middlewares), and publishes it to Consul so that the edge Traefik can serve it.
 
+> ⚠️ **SECURITY WARNING:** This service (and its web dashboard / REST API) is designed strictly for internal, trusted network environments. **It is absolutely NOT designed to be exposed in a DMZ or to the public Internet.** There is no authentication mechanism. Exposing it could allow attackers to manipulate your routing infrastructure.
+
+> **Multi-instance** — a single agent can aggregate multiple Traefik L2 instances into the same Consul cluster.  
+> **Cluster mode** — provides a REST API and a web dashboard to manage instances at runtime without restarting.
+
 ## Architecture
 
 ```
-                    Internet
-                       │
-               ┌───────▼───────┐
-               │  Edge Traefik │  (L1) ─ public-facing
-               │  consul prov. │
-               └───┬───────┬───┘
-                   │       │
-          ┌────────▼──┐ ┌──▼────────┐
-          │  gw-http  │ │ gw-https  │   ◄── Consul services (per node)
-          │  :80      │ │ :443      │
-          └────┬──────┘ └──────┬────┘
-               │               │
-         ┌─────▼───────────────▼─────┐
-         │     Gateway Traefik (L2)  │  ─ internal, per-node
-         │     rawdata API :8080     │
-         └─────────▲─────────────────┘
-                   │ GET /api/rawdata
-         ┌─────────┴─────────────────┐
-         │   consul_aggregator       │  ◄── this agent
-         │   (runs alongside L2)     │
-         └─────────┬─────────────────┘
-                   │ PUT /v1/kv/...  or  PUT /v1/agent/service/register
-                   ▼
-              ┌──────────┐
-              │  Consul  │
-              └──────────┘
+                     Internet
+                        │
+                ┌───────▼───────┐
+                │  Edge Traefik │  (L1) — public-facing
+                │  consul prov. │
+                └───┬───────┬───┘
+                    │       │
+           ┌────────▼──┐ ┌──▼────────┐
+           │  gw-http  │ │ gw-https  │   ◄── Consul services (per instance)
+           │  :80      │ │ :443      │
+           └────┬──────┘ └──────┬────┘
+                │               │
+    ┌───────────▼───┐   ┌───────▼───────────┐
+    │ L2 Traefik #1 │   │ L2 Traefik #2 ... │   — internal gateways
+    │ :8080         │   │ :8080             │
+    └───────▲───────┘   └───────▲───────────┘
+            │ GET /api/rawdata  │
+    ┌───────┴───────────────────┴───────┐
+    │       consul_aggregator          │  ◄── this agent
+    │   (aggregates all L2 instances)  │
+    │   dashboard :8099 (cluster mode) │
+    └───────────────┬──────────────────┘
+                    │ PUT /v1/kv/...  or  PUT /v1/agent/service/register
+                    ▼
+               ┌──────────┐
+               │  Consul  │
+               └──────────┘
 ```
 
 ### Entrypoint splitting
 
-Each L2 gateway registers **two services** in Consul:
+Each L2 gateway instance registers **two services** in Consul:
 
 | Service | Port | Routers with entrypoint |
 |---|---|---|
-| `gw-<NODE>-http` | 80 | `web` |
-| `gw-<NODE>-https` | 443 | `websecure` (tls=true) |
+| `gw-<NODE>-<INSTANCE>-http` | 80 | `web` |
+| `gw-<NODE>-<INSTANCE>-https` | 443 | `websecure` (tls=true) |
+
+> When using a single instance named `default` (legacy config), the `<INSTANCE>` part is omitted: `gw-<NODE>-http`.
 
 When a router has **both** `web` and `websecure` entrypoints, it is split into two edge routers:
-- `<name>_web` → routes to `gw-<NODE>-http`
-- `<name>_websecure` → routes to `gw-<NODE>-https` with `tls=true`
+- `<name>_web` → routes to the HTTP service
+- `<name>_websecure` → routes to the HTTPS service with `tls=true`
 
 This ensures the edge Traefik knows exactly which port and protocol to use.
 
@@ -54,7 +62,7 @@ This ensures the edge Traefik knows exactly which port and protocol to use.
 
 ## Modes
 
-The agent supports two operating modes, controlled by the `MODE` env var:
+The agent supports three operating modes, controlled by the `MODE` env var:
 
 ### `MODE=tags` (Consul Catalog)
 
@@ -76,6 +84,14 @@ providers:
       - "consul:8500"
     rootKey: "traefik"
 ```
+
+### `MODE=cluster` (KV + Dashboard + REST API)
+
+- Same sync behavior as `kv` mode
+- Exposes a **REST API** on `API_PORT` (default `8099`) for managing instances
+- Serves a **web dashboard** at `http://<host>:<API_PORT>/`
+- Instances can be **added and removed at runtime** without restarting the agent
+- Instances from `TRAEFIK_INSTANCES` or `TRAEFIK_URL` env vars are loaded as initial state
 
 ---
 
@@ -155,17 +171,41 @@ The renew happens every `HC_INTERVAL` (10s) and resets the TTL countdown to `HC_
 
 | Variable | Default | Description |
 |---|---|---|
-| `MODE` | `kv` | Operating mode: `kv` or `tags` |
+| `MODE` | `kv` | Operating mode: `kv`, `tags`, or `cluster` |
 | `CONSUL_ADDR` | `http://consul:8500` | Consul HTTP API address |
 | `NODE_NAME` | hostname | Unique name for this gateway node |
-| `TRAEFIK_URL` | *(required)* | Traefik API endpoint (e.g. `http://traefik:8080`) |
+| `TRAEFIK_URL` | *(required¹)* | Traefik API endpoint (single instance) |
 | `TRAEFIK_HOST` | *(empty)* | Optional Host header for Traefik API requests |
 | `SERVICE` | derived from `TRAEFIK_URL` | L2 Traefik address (host extracted for `:80` / `:443`) |
+| `TRAEFIK_INSTANCES` | *(empty)* | JSON array of instances (overrides `TRAEFIK_URL`, see below) |
+| `API_PORT` | `8099` | Port for the dashboard/API (cluster mode only) |
 | `HC_INTERVAL` | `10s` | Health check + session renew interval |
 | `HC_TIMEOUT` | `5s` | Health check timeout |
 | `HC_DEREGISTER_AFTER` | `30s` | Deregister timeout + session TTL |
 | `RESYNC_SECONDS` | `30` | Full resync interval (seconds) |
 | `DEBUG` | `false` | Write debug logs to `debug.log` |
+
+> ¹ `TRAEFIK_URL` is required in `kv`/`tags` modes unless `TRAEFIK_INSTANCES` is set. In `cluster` mode, both are optional (instances can be added via the dashboard).
+
+### Multi-instance configuration (`TRAEFIK_INSTANCES`)
+
+To aggregate multiple Traefik L2 gateways in a single agent, set `TRAEFIK_INSTANCES` to a JSON array:
+
+```bash
+TRAEFIK_INSTANCES='[
+  {"name": "site-a", "url": "http://traefik-a:8080", "service": "http://192.168.1.10:80"},
+  {"name": "site-b", "url": "http://traefik-b:8080", "host": "api.internal"}
+]'
+```
+
+Each object supports:
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | Unique instance identifier |
+| `url` | yes | Traefik API endpoint |
+| `host` | no | Custom `Host` header for the API request |
+| `service` | no | L2 address (auto-derived from `url` if omitted) |
 
 ---
 
@@ -175,30 +215,46 @@ The renew happens every `HC_INTERVAL` (10s) and resets the TTL countdown to `HC_
 consul_aggregator/
 ├── __init__.py         # Package marker
 ├── __main__.py         # Entry point — wires components by mode
-├── config.py           # Env vars → typed Config dataclass
+├── config.py           # Env vars → Config + InstanceConfig dataclasses
 ├── consul_client.py    # Consul HTTP client (services, KV, sessions)
-├── traefik_client.py   # Fetches /api/rawdata from Traefik
+├── traefik_client.py   # Fetches /api/rawdata from a Traefik instance
 ├── normalizer.py       # Pure functions: sanitize, flatten, normalize
 ├── kv_builder.py       # Rawdata → Consul KV entries (mode=kv)
 ├── tag_builder.py      # Rawdata → Consul service tags (mode=tags)
-└── sync.py             # Sync engine: differential updates, sessions, cache
+├── sync.py             # Sync engine: multi-instance, sessions, cache
+├── api.py              # REST API (Flask) for cluster mode
+└── static/
+    └── index.html      # Dashboard micro-frontend
 ```
 
 ---
 
 ## Quick start
 
+### Single instance (legacy)
+
 ```bash
-# Copy and edit config
 cp .env.template .env
+# Edit .env: set TRAEFIK_URL, MODE, etc.
 
-# Run with Docker
-docker build -t consul-aggregator .
-docker run --env-file .env consul-aggregator
+docker compose up -d --build
+```
 
-# Or run locally
-pip install requests
-python -m consul_aggregator
+### Cluster mode (dashboard + multi-instance)
+
+```bash
+cp .env.template .env
+# Set MODE=cluster in .env
+
+docker compose up -d --build
+# Open http://localhost:8099
+```
+
+### Run locally
+
+```bash
+pip install -r requirements.txt
+MODE=cluster python -m consul_aggregator
 ```
 
 ---
@@ -207,11 +263,29 @@ python -m consul_aggregator
 
 On each resync cycle the agent:
 
-1. Fetches fresh `/api/rawdata` from the L2 Traefik
-2. Builds the new config (KV entries or tags)
-3. **KV mode**: compares new keys vs previously known keys → deletes stale keys → writes new keys with `acquire`
-4. **Tags mode**: re-registers the services (Consul replaces all tags on PUT)
-5. Caches the last snapshot for replay if Consul goes down and comes back
+1. Fetches fresh `/api/rawdata` from **each** registered L2 Traefik instance
+2. Builds the new config (KV entries or tags) per instance
+3. **Aggregates** all entries/payloads into a single consolidated set
+4. **KV mode**: compares new keys vs previously known keys → deletes stale keys → writes new keys with `acquire`
+5. **Tags mode**: re-registers the services (Consul replaces all tags on PUT)
+6. Caches the last snapshot for replay if Consul goes down and comes back
+
+> If one instance fails to respond, the others are still synced. The failed instance is logged as a warning.
+
+---
+
+## REST API (cluster mode)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Dashboard UI |
+| `GET` | `/api/status` | Engine status (consul alive, sync count, etc.) |
+| `GET` | `/api/instances` | List all registered instances |
+| `POST` | `/api/instances` | Add instance (`{name, url, host?, service?}`) |
+| `DELETE` | `/api/instances/<name>` | Remove instance |
+| `POST` | `/api/resync` | Trigger manual resync |
+| `GET` | `/api/config` | Current configuration (read-only) |
+| `PATCH` | `/api/config` | Update `resync_seconds` at runtime |
 
 ---
 
@@ -220,7 +294,9 @@ On each resync cycle the agent:
 | Scenario | Behavior |
 |---|---|
 | **Consul goes down** | Snapshot is cached. When Consul comes back (detected by health monitor), cached snapshot is replayed. |
-| **Traefik L2 unreachable** | Resync fails, previous config stays in Consul. Logged as warning. |
+| **Traefik L2 unreachable** | Resync fails for that instance only, other instances still sync. Previous config stays in Consul. Logged as warning. |
 | **Agent dies (KV mode)** | Session expires after `HC_DEREGISTER_AFTER` → all KV keys deleted automatically. |
 | **Agent dies (tags mode)** | Health check fails → service deregistered after `HC_DEREGISTER_AFTER` → tags gone. |
 | **Agent restarts** | New session created, old session eventually expires cleaning old keys. New keys written immediately. |
+| **Instance added at runtime** | Next resync picks up the new instance. Manual resync via API/dashboard triggers immediately. |
+| **Instance removed at runtime** | Stale keys from that instance are cleaned on next sync (differential delete). |

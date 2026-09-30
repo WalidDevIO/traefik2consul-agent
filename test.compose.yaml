@@ -1,7 +1,11 @@
+# Test stack: a Traefik L2 instance + a whoami service to generate real rawdata.
+# Usage: docker compose -f test.compose.yaml up -d
+# Then add this instance in the dashboard: name=test, url=http://traefik:8080
+
 services:
   traefik:
     image: traefik:latest
-    container_name: traefik
+    container_name: traefik-test
     restart: unless-stopped
     command:
       - "--api.insecure=true"
@@ -17,6 +21,7 @@ services:
       - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+
   whoami:
     image: traefik/whoami
     container_name: whoami
@@ -24,4 +29,5 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)"
+      - "traefik.http.routers.whoami.entrypoints=web,websecure"
       - "traefik.http.services.whoami.loadbalancer.server.port=80"

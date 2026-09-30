@@ -8,7 +8,7 @@ import logging
 
 import requests
 
-from .config import Config
+from .config import InstanceConfig
 
 logger = logging.getLogger("consul_aggregator")
 
@@ -16,9 +16,9 @@ logger = logging.getLogger("consul_aggregator")
 class TraefikClient:
     """Fetches Traefik rawdata (effective runtime configuration)."""
 
-    def __init__(self, config: Config) -> None:
-        self._base_url = config.traefik_url
-        self._host_header = config.traefik_host
+    def __init__(self, instance: InstanceConfig) -> None:
+        self._base_url = instance.url
+        self._host_header = instance.host
         logger.debug(f"TraefikClient initialized: base_url={self._base_url}, host_header={self._host_header or '(none)'}")
 
     # ── Internal ──────────────────────────────────────────────

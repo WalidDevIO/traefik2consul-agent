@@ -17,9 +17,9 @@ import logging
 import re
 import threading
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .config import Config
+from .config import Config, InstanceConfig
 from .consul_client import ConsulClient
 from .traefik_client import TraefikClient
 
@@ -51,14 +51,16 @@ class SyncEngine:
         self,
         config: Config,
         consul: ConsulClient,
-        traefik: TraefikClient,
-        builder: Any,  # KVBuilder or TagBuilder
     ) -> None:
         self._config = config
         self._consul = consul
-        self._traefik = traefik
-        self._builder = builder
-        self._mode = config.mode
+        # cluster mode uses kv under the hood
+        self._mode = "kv" if config.mode == "cluster" else config.mode
+        
+        self._instances: List[Tuple[TraefikClient, Any, InstanceConfig]] = []
+        self._instances_lock = threading.Lock()
+        for inst in config.instances:
+            self._add_instance_internal(inst)
 
         # Session config — reuse HC values for consistency
         self._session_ttl = config.hc_deregister_after   # e.g. "30s"
@@ -76,10 +78,82 @@ class SyncEngine:
         self._cache: Optional[Any] = None
         self._cache_lock = threading.Lock()
 
+        # Sync status tracking
+        self._last_sync_time: Optional[float] = None
+        self._last_sync_ok: bool = False
+        self._sync_count: int = 0
+
         logger.debug(
             f"SyncEngine initialized: mode={self._mode}, session_ttl={self._session_ttl}, "
             f"renew_interval={self._renew_interval}s, resync={config.resync_seconds}s"
         )
+
+    # ── Instance management ───────────────────────────────────
+
+    def _add_instance_internal(self, inst: InstanceConfig) -> None:
+        """Create traefik client + builder for an instance (no lock)."""
+        traefik = TraefikClient(inst)
+        if self._mode == "kv":
+            from .kv_builder import KVBuilder
+            builder = KVBuilder(self._config, inst)
+        else:
+            from .tag_builder import TagBuilder
+            builder = TagBuilder(self._config, inst)
+        self._instances.append((traefik, builder, inst))
+
+    def add_instance(self, inst: InstanceConfig) -> None:
+        """Add a new Traefik instance at runtime."""
+        with self._instances_lock:
+            # Check for duplicate name
+            for _, _, existing in self._instances:
+                if existing.name == inst.name:
+                    raise ValueError(f"Instance '{inst.name}' already exists")
+            self._add_instance_internal(inst)
+            # Also add to config.instances for consistency
+            self._config.instances.append(inst)
+        logger.info(f"➕ Instance added: {inst.name} ({inst.url})")
+
+    def remove_instance(self, name: str) -> bool:
+        """Remove a Traefik instance by name at runtime."""
+        with self._instances_lock:
+            for i, (_, _, inst) in enumerate(self._instances):
+                if inst.name == name:
+                    self._instances.pop(i)
+                    self._config.instances = [
+                        ic for ic in self._config.instances if ic.name != name
+                    ]
+                    logger.info(f"➖ Instance removed: {name}")
+                    return True
+        return False
+
+    def get_instances(self) -> List[InstanceConfig]:
+        """Return a snapshot of current instances."""
+        with self._instances_lock:
+            return [inst for _, _, inst in self._instances]
+
+    def get_status(self) -> dict:
+        """Return engine status for the API."""
+        return {
+            "mode": self._mode,
+            "consul_alive": self._consul.is_alive,
+            "instance_count": len(self._instances),
+            "last_sync_time": self._last_sync_time,
+            "last_sync_ok": self._last_sync_ok,
+            "sync_count": self._sync_count,
+            "session_id": self._get_session() if self._mode == "kv" else None,
+            "cluster_name": self._config.cluster_name,
+            "resync_seconds": self._config.resync_seconds,
+        }
+
+    def manual_resync(self) -> bool:
+        """Trigger a manual resync cycle."""
+        try:
+            data = self._fetch_and_build_all()
+            self._push(data)
+            return True
+        except Exception as e:
+            logger.warning(f"Manual resync failed: {e}")
+            return False
 
     # ── Cache ─────────────────────────────────────────────────
 
@@ -108,9 +182,9 @@ class SyncEngine:
                 logger.debug(f"_ensure_session: reusing existing session {self._session_id}")
                 return self._session_id
 
-            logger.debug(f"_ensure_session: creating new session for node={self._config.node_name}")
+            logger.debug(f"_ensure_session: creating new session for cluster={self._config.cluster_name}")
             sid = self._consul.session_create(
-                name=f"consul-aggregator-{self._config.node_name}",
+                name=f"consul-aggregator-{self._config.cluster_name}",
                 ttl=self._session_ttl,
             )
             self._session_id = sid
@@ -170,10 +244,11 @@ class SyncEngine:
 
         return ok
 
-    def _push_kv(self, entries: Dict[str, str]) -> None:
-        """Cache KV entries and attempt sync."""
-        logger.debug(f"_push_kv: pushing {len(entries)} KV entries")
-        self._cache_set(entries)
+    def _push_kv(self, data: Tuple[Dict[str, str], List[dict]]) -> None:
+        """Cache KV entries and services, and attempt sync."""
+        entries, payloads = data
+        logger.debug(f"_push_kv: pushing {len(entries)} KV entries and {len(payloads)} services")
+        self._cache_set(data)
 
         if not self._consul.is_alive:
             logger.warning("📦 cached snapshot (Consul down)")
@@ -186,7 +261,6 @@ class SyncEngine:
             logger.warning("⚠️ some KV writes failed (cached for retry)")
 
         # Register lightweight services (health checks only)
-        payloads = self._builder.build_service_payloads()
         logger.debug(f"_push_kv: registering {len(payloads)} lightweight services")
         for payload in payloads:
             svc_ok = self._consul.register_service(payload)
@@ -235,17 +309,42 @@ class SyncEngine:
         else:
             self._push_tags(data)
 
-    def _build(self, rawdata: dict) -> Any:
-        logger.debug(f"_build: mode={self._mode}, rawdata keys={list(rawdata.keys())}")
+    def _fetch_and_build_all(self) -> Any:
+        import time as _time
         if self._mode == "kv":
-            result = self._builder.build_kv_entries(rawdata)
-            logger.debug(f"_build: built {len(result)} KV entries")
-            return result
+            all_entries = {}
+            all_payloads = []
+            with self._instances_lock:
+                instances_snapshot = list(self._instances)
+            for traefik, builder, inst in instances_snapshot:
+                try:
+                    raw = traefik.fetch_rawdata()
+                    entries = builder.build_kv_entries(raw)
+                    payloads = builder.build_service_payloads()
+                    all_entries.update(entries)
+                    all_payloads.extend(payloads)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch/build for instance {inst.name}: {e}")
+            self._last_sync_time = _time.time()
+            self._last_sync_ok = bool(all_entries)
+            self._sync_count += 1
+            return (all_entries, all_payloads)
         else:
-            tags_by_proto = self._builder.build_tags(rawdata)
-            result = self._builder.build_consul_payloads(tags_by_proto)
-            logger.debug(f"_build: built {len(result)} consul payloads")
-            return result
+            all_payloads = []
+            with self._instances_lock:
+                instances_snapshot = list(self._instances)
+            for traefik, builder, inst in instances_snapshot:
+                try:
+                    raw = traefik.fetch_rawdata()
+                    tags_by_proto = builder.build_tags(raw)
+                    payloads = builder.build_consul_payloads(tags_by_proto)
+                    all_payloads.extend(payloads)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch/build for instance {inst.name}: {e}")
+            self._last_sync_time = _time.time()
+            self._last_sync_ok = bool(all_payloads)
+            self._sync_count += 1
+            return all_payloads
 
     def _push_cached_if_any(self) -> None:
         data = self._cache_get()
@@ -274,8 +373,7 @@ class SyncEngine:
             time.sleep(self._config.resync_seconds)
             logger.debug("_periodic_resync: starting resync cycle")
             try:
-                raw = self._traefik.fetch_rawdata()
-                data = self._build(raw)
+                data = self._fetch_and_build_all()
                 self._push(data)
                 logger.debug("_periodic_resync: resync cycle completed successfully")
             except Exception as e:
@@ -287,9 +385,7 @@ class SyncEngine:
         logger.debug("initial_sync: starting initial sync")
         try:
             logger.info("🔍 Initial rawdata snapshot...")
-            raw = self._traefik.fetch_rawdata()
-            logger.debug(f"initial_sync: fetched rawdata ({len(raw)} top-level keys)")
-            data = self._build(raw)
+            data = self._fetch_and_build_all()
             self._push(data)
             logger.debug("initial_sync: initial sync completed")
         except Exception as e:
@@ -312,5 +408,8 @@ class SyncEngine:
             threading.Thread(target=self._session_renew_loop, daemon=True).start()
 
         logger.info("👂 Running (periodic snapshot mode)...")
+        if self._config.mode == "cluster":
+            # In cluster mode, don't block — the API server controls the lifecycle
+            return
         while True:
             time.sleep(3600)
