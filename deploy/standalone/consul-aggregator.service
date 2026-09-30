@@ -1,0 +1,25 @@
+[Unit]
+Description=Consul Aggregator Agent
+After=network.target
+
+[Service]
+Type=simple
+# Remplace par l'utilisateur approprié (ex: ton user lxc ou root)
+User=root
+# Chemin absolu vers le dossier du projet
+WorkingDirectory=/opt/consul_aggregator
+
+# Charge directement les variables d'environnement depuis le .env
+EnvironmentFile=/opt/consul_aggregator/.env
+
+# On utilise directement le python de l'environnement virtuel créé par run.sh
+ExecStart=/opt/consul_aggregator/venv/bin/python -m consul_aggregator
+
+# Redémarre toujours en cas de crash
+Restart=always
+RestartSec=5
+# Assure que les logs Python apparaissent bien dans journalctl
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -214,41 +214,58 @@ Each object supports:
 ```
 consul_aggregator/
 ├── __init__.py         # Package marker
-├── __main__.py         # Entry point — wires components by mode
-├── config.py           # Env vars → Config + InstanceConfig dataclasses
-├── consul_client.py    # Consul HTTP client (services, KV, sessions)
-├── traefik_client.py   # Fetches /api/rawdata from a Traefik instance
-├── normalizer.py       # Pure functions: sanitize, flatten, normalize
-├── kv_builder.py       # Rawdata → Consul KV entries (mode=kv)
-├── tag_builder.py      # Rawdata → Consul service tags (mode=tags)
-├── sync.py             # Sync engine: multi-instance, sessions, cache
-├── api.py              # REST API (Flask) for cluster mode
+├── __main__.py         # Entry point
+├── config.py           # Env vars → Config + InstanceConfig
+├── consul_client.py    # Consul HTTP client
+├── traefik_client.py   # Fetches /api/rawdata
+├── normalizer.py       # Pure functions for tag/kv names
+├── kv_builder.py       # Rawdata → Consul KV entries
+├── tag_builder.py      # Rawdata → Consul service tags
+├── sync.py             # Sync engine (multi-instance, sessions)
+├── api.py              # REST API (Flask)
 └── static/
     └── index.html      # Dashboard micro-frontend
+
+deploy/
+├── docker/
+│   ├── Dockerfile
+│   ├── compose.yml
+│   └── test.compose.yaml
+└── standalone/
+    ├── run.sh
+    ├── run.bat
+    └── consul-aggregator.service
 ```
 
 ---
 
 ## Quick start
 
-### Single instance (legacy)
+### Docker (Cluster mode or Legacy)
 
 ```bash
 cp .env.template .env
-# Edit .env: set TRAEFIK_URL, MODE, etc.
+# Edit .env (set TRAEFIK_URL or TRAEFIK_INSTANCES)
 
-docker compose up -d --build
-```
-
-### Cluster mode (dashboard + multi-instance)
-
-```bash
-cp .env.template .env
-# Set MODE=cluster in .env
-
-docker compose up -d --build
+docker compose -f deploy/docker/compose.yml up -d --build
 # Open http://localhost:8099
 ```
+
+### Standalone (No Docker)
+
+You can run the agent directly on a Linux or Windows host using the provided runner scripts. They will automatically create a python virtual environment, install dependencies, and start the agent.
+
+```bash
+cp .env.template .env
+
+# On Linux / macOS / LXC:
+./deploy/standalone/run.sh
+
+# On Windows:
+.\deploy\standalone\run.bat
+```
+
+> **Note for systemd users**: A ready-to-use template `consul-aggregator.service` is available in the `deploy/standalone/` folder.
 
 ### Run locally
 

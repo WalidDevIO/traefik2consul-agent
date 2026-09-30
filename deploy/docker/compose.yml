@@ -1,6 +1,8 @@
 services:
   consul-aggregator:
-    build: .
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile
     container_name: consul-aggregator
     restart: unless-stopped
     environment:
@@ -8,7 +10,7 @@ services:
     ports:
       - "${API_PORT:-8099}:${API_PORT:-8099}"
     env_file:
-      - .env
+      - ../../.env
     depends_on:
       consul:
         condition: service_started
