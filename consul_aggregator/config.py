@@ -33,6 +33,7 @@ class Config:
     mode: str  # "kv", "tags", or "cluster"
     api_port: int
     enable_ui: bool
+    instances_file: str
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -55,48 +56,64 @@ class Config:
         traefik_host = os.environ.get("TRAEFIK_HOST", "").strip()
         service = os.environ.get("SERVICE", "").strip()
 
+        instances_file = os.environ.get("INSTANCES_FILE", "instances.json")
+
+        def _parse_instance(inst: dict, default_name: str) -> InstanceConfig:
+            name = inst.get("name", default_name)
+            url = inst.get("url", "").rstrip("/")
+            if not url:
+                raise SystemExit(f"Instance {name} missing 'url'")
+            
+            host_hdr = inst.get("host", "").strip()
+            svc = inst.get("service", "").strip()
+            if not svc:
+                logging.getLogger(__name__).warning(f"Instance {name}: service not set, using url")
+                svc = "http:" + url.split(":")[1] + ":80"
+            
+            parsed = urllib.parse.urlparse(svc)
+            host = parsed.hostname or ""
+            svc_http = f"http://{host}:80"
+            svc_https = f"https://{host}:443"
+            
+            return InstanceConfig(
+                name=name,
+                url=url,
+                host=host_hdr,
+                service_http=svc_http,
+                service_https=svc_https,
+            )
+
         import json
 
         instances = []
+        
+        # 1. Load from file if it exists
+        if os.path.exists(instances_file):
+            try:
+                with open(instances_file, "r") as f:
+                    file_data = json.load(f)
+                    for i, inst in enumerate(file_data):
+                        instances.append(_parse_instance(inst, f"file_inst{i}"))
+            except Exception as e:
+                logging.getLogger(__name__).error(f"Failed to load {instances_file}: {e}")
+
+        # 2. Load from ENV
         instances_env = os.environ.get("TRAEFIK_INSTANCES")
         if instances_env:
             try:
                 parsed_instances = json.loads(instances_env)
                 for i, inst in enumerate(parsed_instances):
-                    name = inst.get("name", f"inst{i}")
-                    url = inst.get("url", "").rstrip("/")
-                    if not url:
-                        raise SystemExit(f"Instance {name} missing 'url'")
-                    
-                    host_hdr = inst.get("host", "").strip()
-                    svc = inst.get("service", "").strip()
-                    if not svc:
-                        logging.getLogger(__name__).warning(f"Instance {name}: service not set, using url")
-                        svc = "http:" + url.split(":")[1] + ":80"
-                    
-                    parsed = urllib.parse.urlparse(svc)
-                    host = parsed.hostname or ""
-                    svc_http = f"http://{host}:80"
-                    svc_https = f"https://{host}:443"
-                    
-                    instances.append(InstanceConfig(
-                        name=name,
-                        url=url,
-                        host=host_hdr,
-                        service_http=svc_http,
-                        service_https=svc_https,
-                    ))
+                    # Only add if not already present by name
+                    parsed_inst = _parse_instance(inst, f"env_inst{i}")
+                    if not any(x.name == parsed_inst.name for x in instances):
+                        instances.append(parsed_inst)
             except json.JSONDecodeError as e:
                 raise SystemExit(f"Failed to parse TRAEFIK_INSTANCES JSON: {e}")
         else:
-            if not traefik_url and mode != "cluster":
-                raise SystemExit("TRAEFIK_URL or TRAEFIK_INSTANCES is required")
+            if not traefik_url and mode != "cluster" and not instances:
+                raise SystemExit("TRAEFIK_URL or TRAEFIK_INSTANCES or instances file is required")
 
-            if not traefik_url:
-                # cluster mode with no initial instances
-                pass
-            else:
-
+            if traefik_url and not any(x.name == "default" for x in instances):
                 if not service:
                     logging.getLogger(__name__).warning("SERVICE is not set, using TRAEFIK_URL")
                     service = "http:" + traefik_url.split(":")[1] + ":80"
@@ -125,6 +142,7 @@ class Config:
             mode=mode,
             api_port=api_port,
             enable_ui=enable_ui,
+            instances_file=instances_file,
         )
         logger = logging.getLogger("consul_aggregator")
         logger.debug(

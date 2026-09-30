@@ -101,6 +101,18 @@ class SyncEngine:
             builder = TagBuilder(self._config, inst)
         self._instances.append((traefik, builder, inst))
 
+    def _save_instances(self) -> None:
+        """Save current instances to the persistence file."""
+        import json
+        from dataclasses import asdict
+        
+        try:
+            with open(self._config.instances_file, "w") as f:
+                json.dump([asdict(inst) for _, _, inst in self._instances], f, indent=2)
+            logger.debug(f"Saved instances to {self._config.instances_file}")
+        except Exception as e:
+            logger.error(f"Failed to save instances to {self._config.instances_file}: {e}")
+
     def add_instance(self, inst: InstanceConfig) -> None:
         """Add a new Traefik instance at runtime."""
         with self._instances_lock:
@@ -111,6 +123,7 @@ class SyncEngine:
             self._add_instance_internal(inst)
             # Also add to config.instances for consistency
             self._config.instances.append(inst)
+            self._save_instances()
         logger.info(f"➕ Instance added: {inst.name} ({inst.url})")
 
     def remove_instance(self, name: str) -> bool:
@@ -122,6 +135,7 @@ class SyncEngine:
                     self._config.instances = [
                         ic for ic in self._config.instances if ic.name != name
                     ]
+                    self._save_instances()
                     logger.info(f"➖ Instance removed: {name}")
                     return True
         return False
