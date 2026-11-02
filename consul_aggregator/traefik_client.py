@@ -19,6 +19,7 @@ class TraefikClient:
     def __init__(self, instance: InstanceConfig) -> None:
         self._base_url = instance.url
         self._host_header = instance.host
+        self._http = requests.Session()
         logger.debug(f"TraefikClient initialized: base_url={self._base_url}, host_header={self._host_header or '(none)'}")
 
     # ── Internal ──────────────────────────────────────────────
@@ -40,7 +41,7 @@ class TraefikClient:
         url = self._rawdata_url(self._base_url)
         logger.debug(f"fetch_rawdata: GET {url} (headers={headers})")
         try:
-            r = requests.get(url, headers=headers, timeout=10)
+            r = self._http.get(url, headers=headers, timeout=10)
             logger.debug(f"fetch_rawdata: status_code={r.status_code}, content_length={len(r.content)}")
             r.raise_for_status()
             data = r.json()

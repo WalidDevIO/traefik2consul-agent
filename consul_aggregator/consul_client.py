@@ -21,6 +21,7 @@ class ConsulClient:
 
     def __init__(self, config: Config) -> None:
         self._addr = config.consul_addr
+        self._http = requests.Session()
         self._alive = True
         self._lock = threading.Lock()
         logger.debug(f"ConsulClient initialized with addr={self._addr}")
@@ -42,7 +43,7 @@ class ConsulClient:
         """Ping Consul leader endpoint; update alive state."""
         logger.debug(f"health_check: pinging {self._addr}/v1/status/leader")
         try:
-            r = requests.get(f"{self._addr}/v1/status/leader", timeout=5)
+            r = self._http.get(f"{self._addr}/v1/status/leader", timeout=5)
             alive = r.status_code == 200
             logger.debug(f"health_check: status_code={r.status_code}, alive={alive}")
 
@@ -72,7 +73,7 @@ class ConsulClient:
             if payload is not None:
                 kwargs["json"] = payload
 
-            r = requests.put(f"{self._addr}{path}", **kwargs)
+            r = self._http.put(f"{self._addr}{path}", **kwargs)
             logger.debug(f"put: {path} returned status_code={r.status_code}")
 
             if r.status_code in (200, 201, 204):
@@ -108,7 +109,7 @@ class ConsulClient:
         """Write a single key/value pair to the Consul KV store."""
         logger.debug(f"kv_put: key={key}, value={value[:120]}")
         try:
-            r = requests.put(
+            r = self._http.put(
                 f"{self._addr}/v1/kv/{key}",
                 data=value.encode("utf-8"),
                 timeout=10,
@@ -131,7 +132,7 @@ class ConsulClient:
         """Delete a single key from the Consul KV store."""
         logger.debug(f"kv_delete: key={key}")
         try:
-            r = requests.delete(f"{self._addr}/v1/kv/{key}", timeout=10)
+            r = self._http.delete(f"{self._addr}/v1/kv/{key}", timeout=10)
             logger.debug(f"kv_delete: {key} returned status_code={r.status_code}")
             return r.status_code == 200
         except Exception as e:
@@ -142,7 +143,7 @@ class ConsulClient:
         """Delete all keys under a prefix (recurse)."""
         logger.debug(f"kv_delete_tree: prefix={prefix}")
         try:
-            r = requests.delete(
+            r = self._http.delete(
                 f"{self._addr}/v1/kv/{prefix}",
                 params={"recurse": "true"},
                 timeout=10,
@@ -157,7 +158,7 @@ class ConsulClient:
         """Write a KV pair bound to a session (auto-deleted on session expiry)."""
         logger.debug(f"kv_acquire: key={key}, session={session_id}, value={value[:120]}")
         try:
-            r = requests.put(
+            r = self._http.put(
                 f"{self._addr}/v1/kv/{key}",
                 params={"acquire": session_id},
                 data=value.encode("utf-8"),
@@ -191,7 +192,7 @@ class ConsulClient:
         """
         logger.debug(f"session_create: name={name}, ttl={ttl}")
         try:
-            r = requests.put(
+            r = self._http.put(
                 f"{self._addr}/v1/session/create",
                 json={
                     "Name": name,
@@ -216,7 +217,7 @@ class ConsulClient:
         """Renew a session to prevent it from expiring."""
         logger.debug(f"session_renew: session_id={session_id}")
         try:
-            r = requests.put(
+            r = self._http.put(
                 f"{self._addr}/v1/session/renew/{session_id}",
                 timeout=10,
             )
@@ -230,7 +231,7 @@ class ConsulClient:
         """Destroy a session (triggers Behavior=delete on all acquired keys)."""
         logger.debug(f"session_destroy: session_id={session_id}")
         try:
-            r = requests.put(
+            r = self._http.put(
                 f"{self._addr}/v1/session/destroy/{session_id}",
                 timeout=10,
             )
